@@ -9,6 +9,7 @@ import shutil
 import time
 import traceback
 import urllib
+from typing import cast
 
 import bs4
 import langid
@@ -18,7 +19,8 @@ from lxml import etree
 from models.base.file import copy_file
 from models.base.utils import get_used_time
 from models.base.web import get_html, post_html
-from models.config.config import config
+from models.config.manager import config
+from models.config.manual import ManualConfig
 from models.config.resources import resources
 from models.core.flags import Flags
 from models.core.translate import deepl_translate, youdao_translate
@@ -82,12 +84,13 @@ def update_emby_actor_info():
                 actor
             )
             result, res = get_html(actor_person, proxies=False, json_data=True)
+            res = cast(dict, res)
             if not result:
                 signal.show_log_text(
                     f"🔴 {i}/{total} {actor_name}: {server_name} 获取演员信息错误！\n    错误信息: {res}"
                 )
                 continue
-            if res.get("Overview") and "actor_info_miss" in emby_on:
+            if res.get("Overview") and "无维基百科信息" not in res.get("Overview") and "actor_info_miss" in emby_on:
                 signal.show_log_text(f"✅ {i}/{total} {actor_name}: {server_name} 已有演员信息！跳过！")
                 continue
 
@@ -115,7 +118,7 @@ def update_emby_actor_info():
                 else:
                     signal.show_log_text(f"🔴 {i}/{total} {actor_name}: 未检索到演员信息！跳过！")
                     continue
-            except:
+            except Exception:
                 signal.show_log_text(traceback.format_exc())
                 continue
             signal.show_log_text("=" * 80)
@@ -294,7 +297,7 @@ def show_emby_actor_list(mode):
 def _get_wiki_detail(url, url_log, actor_info: EMbyActressInfo):
     ja = True if "ja." in url else False
     emby_on = config.emby_on
-    result, res = get_html(url)
+    result, res = get_html(url, headers=config.random_headers)
     if not result:
         signal.show_log_text(f" 🔴 维基百科演员页请求失败！\n    错误信息: {res}\n    请求地址: {url}")
         return False
@@ -348,6 +351,12 @@ def _get_wiki_detail(url, url_log, actor_info: EMbyActressInfo):
     if actor_profile:
         att_keys = actor_profile.find_all(scope=["row"])
         att_values = actor_profile.find_all(name="td", style=[""], colspan=False)
+        if len(att_keys) != len(att_values):
+            signal.show_log_text(
+                " 🔴 个人资料表格列数不匹配，可能是页面格式变更或数据不完整，请检查！\n"
+                f"    列数: {len(att_keys)} - {len(att_values)}\n    页面地址: {url}"
+            )
+            return False
         bday = actor_output.find(class_="bday")
         bday = f"({bday.get_text('', strip=True)})" if bday else ""
         if att_keys and att_values:
@@ -400,7 +409,7 @@ def _get_wiki_detail(url, url_log, actor_info: EMbyActressInfo):
                 for each in actor_1:
                     info = each.get_text("", strip=True)
                     overview += info + "\n"
-    except:
+    except Exception:
         signal.show_traceback_log(traceback.format_exc())
 
     # 简历
@@ -432,7 +441,7 @@ def _get_wiki_detail(url, url_log, actor_info: EMbyActressInfo):
                 for each in actor_1:
                     info = each.get_text("", strip=True)
                     overview += info + "\n"
-    except:
+    except Exception:
         signal.show_traceback_log(traceback.format_exc())
 
     # 翻译
@@ -549,7 +558,7 @@ def _get_wiki_detail(url, url_log, actor_info: EMbyActressInfo):
             signal.show_log_text(f"出生: {date} 在 {locations[0]}")
         if overview:
             signal.show_log_text(f"\n{overview}")
-    except:
+    except Exception:
         signal.show_log_text(traceback.format_exc())
     return True
 
@@ -572,7 +581,7 @@ def _search_wiki(actor_info: EMbyActressInfo):
     # https://www.wikidata.org/w/api.php?action=wbsearchentities&search=夢乃あいか&language=zh&format=json
     # https://www.wikidata.org/w/api.php?action=wbsearchentities&search=吉根柚莉愛&language=zh&format=json
     signal.show_log_text(f" 🌐 请求搜索页: {url}")
-    head, res = get_html(url, json_data=True)
+    head, res = get_html(url, json_data=True, headers=config.random_headers)
     if not head:
         signal.show_log_text(f" 🔴 维基百科搜索结果请求失败！\n    错误信息: {res}")
         return
@@ -608,7 +617,7 @@ def _search_wiki(actor_info: EMbyActressInfo):
                 description_en = description
                 description_t = description.lower()
                 signal.show_log_text(f" 📄 描述信息: {description}")
-                for each_des in config.actress_wiki_keywords:
+                for each_des in ManualConfig.ACTRESS_WIKI_KEYWORDS:
                     if each_des.lower() in description_t:
                         signal.show_log_text(f" 🎉 描述命中关键词: {each_des}")
                         break
@@ -626,7 +635,7 @@ def _search_wiki(actor_info: EMbyActressInfo):
             # https://m.wikidata.org/wiki/Special:EntityData/Q24836820.json
             # https://m.wikidata.org/wiki/Special:EntityData/Q76283484.json
             signal.show_log_text(f" 🌐 请求 ID 数据: {url}")
-            head, res = get_html(url, json_data=True)
+            head, res = get_html(url, json_data=True, headers=config.random_headers)
             if not head:
                 signal.show_log_text(f" 🔴 通过 id 获取 wiki url 失败！\n    错误信息: {res}")
                 continue
@@ -639,11 +648,11 @@ def _search_wiki(actor_info: EMbyActressInfo):
                 if descriptions:
                     try:
                         description_zh = descriptions["zh"]["value"]
-                    except:
+                    except Exception:
                         signal.show_traceback_log(traceback.format_exc())
                     try:
                         description_ja = descriptions["ja"]["value"]
-                    except:
+                    except Exception:
                         signal.show_traceback_log(traceback.format_exc())
                     if description_en:
                         if not description_zh:
@@ -674,14 +683,14 @@ def _search_wiki(actor_info: EMbyActressInfo):
                             temp_ja = en_ja.get(description_en)
                             if temp_ja:
                                 description_ja = temp_ja
-            except:
+            except Exception:
                 signal.show_traceback_log(traceback.format_exc())
 
             # 获取 Tmdb，Imdb，Twitter，Instagram等id
             url_log = ""
             try:
                 claims = res["entities"][wiki_id]["claims"]
-            except:
+            except Exception:
                 signal.show_traceback_log(traceback.format_exc())
                 claims = None
             if claims:
@@ -689,37 +698,37 @@ def _search_wiki(actor_info: EMbyActressInfo):
                     tmdb_id = claims["P4985"][0]["mainsnak"]["datavalue"]["value"]
                     actor_info.provider_ids["Tmdb"] = tmdb_id
                     url_log += f"TheMovieDb: https://www.themoviedb.org/person/{tmdb_id} \n"
-                except:
+                except Exception:
                     signal.show_traceback_log(traceback.format_exc())
                 try:
                     imdb_id = claims["P345"][0]["mainsnak"]["datavalue"]["value"]
                     actor_info.provider_ids["Imdb"] = imdb_id
                     url_log += (f"IMDb: https://www.imdb.com/name/{imdb_id} \n",)
-                except:
+                except Exception:
                     signal.show_traceback_log(traceback.format_exc())
                 try:
                     twitter_id = claims["P2002"][0]["mainsnak"]["datavalue"]["value"]
                     actor_info.provider_ids["Twitter"] = twitter_id
                     url_log += f"Twitter: https://twitter.com/{twitter_id} \n"
-                except:
+                except Exception:
                     signal.show_traceback_log(traceback.format_exc())
                 try:
                     instagram_id = claims["P2003"][0]["mainsnak"]["datavalue"]["value"]
                     actor_info.provider_ids["Instagram"] = instagram_id
                     url_log += f"Instagram: https://www.instagram.com/{instagram_id} \n"
-                except:
+                except Exception:
                     signal.show_traceback_log(traceback.format_exc())
                 try:
                     fanza_id = claims["P9781"][0]["mainsnak"]["datavalue"]["value"]
                     actor_info.provider_ids["Fanza"] = fanza_id
                     url_log += f"Fanza: https://actress.dmm.co.jp/-/detail/=/actress_id={fanza_id} \n"
-                except:
+                except Exception:
                     signal.show_traceback_log(traceback.format_exc())
                 try:
                     xhamster_id = claims["P8720"][0]["mainsnak"]["datavalue"]["value"]
                     actor_info.provider_ids["xHamster"] = f"https://xhamster.com/pornstars/{xhamster_id}"
                     url_log += f"xHamster: https://xhamster.com/pornstars/{xhamster_id} \n"
-                except:
+                except Exception:
                     signal.show_traceback_log(traceback.format_exc())
 
             # 获取 wiki url 和 description
@@ -784,10 +793,10 @@ def _search_wiki(actor_info: EMbyActressInfo):
                     else:
                         signal.show_log_text(" 🔴 维基百科未获取到演员页 url！")
                     return
-            except:
+            except Exception:
                 signal.show_traceback_log(traceback.format_exc())
 
-    except:
+    except Exception:
         signal.show_log_text(traceback.format_exc())
 
 
@@ -863,7 +872,7 @@ def _deal_kodi_actors(gfriends_actor_data, add):
                                 signal.show_log_text(f"🔴 {each} 没有头像资源！")
                                 failed.add(each)
                                 no_pic.add(each)
-                    except:
+                    except Exception:
                         signal.show_traceback_log(traceback.format_exc())
         if add:
             signal.show_log_text(

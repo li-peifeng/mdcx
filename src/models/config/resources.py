@@ -4,21 +4,33 @@ import sys
 import traceback
 
 import zhconv
-from PyQt5.QtGui import QFontDatabase
 from lxml import etree
+from PyQt5.QtGui import QFontDatabase
 
-from models.base.file import copy_file
-from models.base.path import get_main_path
-from models.base.utils import singleton
-from models.config.config import config
-from models.signals import signal
+from ..base.file import copy_file
+from ..base.utils import singleton
+from ..signals import signal
+from .consts import IS_PYINSTALLER, MAIN_PATH
+from .manager import manager
+from .manual import ManualConfig
 
 
 @singleton
 class Resources:
     def __init__(self):
-        self._get_path()
-        # region 获取资源路径
+        # 获取内置资源路径和用户数据路径
+        self._resources_base_path = os.path.join(MAIN_PATH, "resources")
+        if IS_PYINSTALLER:
+            # 获取 pyinstaller 打包程序运行时解压资源的临时目录
+            try:
+                self._resources_base_path = os.path.join(sys._MEIPASS, "resources")
+            except Exception:
+                signal.show_traceback_log(self._resources_base_path)
+                signal.show_traceback_log(traceback.format_exc())
+        self._userdata_base_path = os.path.join(manager.data_folder, "userdata")
+        os.makedirs(self._userdata_base_path, exist_ok=True)  # 确保用户数据目录存在
+
+        # 获取资源路径
         self.sehua_title_path = self._resource_path("c_number/c_number.json")  # 内置色花数据的文件路径
         self.actor_map_backup_path = self._resource_path("mapping_table/mapping_actor.xml")  # 内置演员映射表的文件路径
         self.info_map_backup_path = self._resource_path("mapping_table/mapping_info.xml")  # 内置信息映射表的文件路径
@@ -58,12 +70,11 @@ class Resources:
         self.icon_umr_path = self.userdata_path("watermark/umr.png")
         self.icon_leak_path = self.userdata_path("watermark/leak.png")
         self.icon_wuma_path = self.userdata_path("watermark/wuma.png")
-        # endregion
 
-        self._check_userdata()
         self.actor_mapping_data = None  # 演员映射表数据
         self.info_mapping_data = None  # 信息映射表数据
         self.sehua_title_data = None  # 色花数据
+
         self._get_or_generate_local_data()
         self._get_mark_icon()
         zhconv.loaddict(self._resource_path("zhconv/zhcdict.json"))  # 加载繁简转换字典
@@ -83,7 +94,7 @@ class Resources:
         xml_actor = self.actor_mapping_data
         if len(xml_actor):
             actor_name = f",{actor.upper()},"
-            for each in config.full_half_char:
+            for each in ManualConfig.FULL_HALF_CHAR:
                 actor_name = actor_name.replace(each[0], each[1])
             actor_ob = xml_actor.xpath(
                 '//a[contains(translate(@keyword, "abcdefghijklmnopqrstuvwxyzａｂｃｄｅｆｇｈｉｊｋｌｍｎｏｐｑｒｓｔｕｖｗｘｙｚＡＢＣＤＥＦＧＨＩＪＫＬＭＮＯＰＱＲＳＴＵＶＷＸＹＺ・", "ABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPQRSTUVWXYZ·"), $name)]',
@@ -113,7 +124,7 @@ class Resources:
         xml_info = self.info_mapping_data
         if len(xml_info):
             info_name = f",{info.upper()},"
-            for each in config.full_half_char:
+            for each in ManualConfig.FULL_HALF_CHAR:
                 info_name = info_name.replace(each[0], each[1])
             info_ob = xml_info.xpath(
                 "//a[contains(translate(@keyword, "
@@ -129,17 +140,6 @@ class Resources:
                 info_data["keyword"] = info_ob.get("keyword").strip(",").split(",")
                 info_data["has_name"] = True
         return info_data
-
-    def _get_path(self):
-        self._resources_base_path = os.path.join(get_main_path(), "resources")
-        if getattr(sys, "frozen", False):  # 是否Bundle Resource，是否打包成exe运行
-            try:
-                self._resources_base_path = os.path.join(sys._MEIPASS, "resources")
-            except:
-                signal.show_traceback_log(self._resources_base_path)
-                signal.show_traceback_log(traceback.format_exc())
-                print(self._resources_base_path, traceback.format_exc())
-        self._userdata_base_path = os.path.join(config.folder, "userdata")
 
     def _resource_path(self, relative_path):
         if os.path.exists(os.path.join(self._resources_base_path, relative_path)):
@@ -160,12 +160,8 @@ class Resources:
         for f in os.listdir(font_folder_path):
             font_db.addApplicationFont(os.path.join(font_folder_path, f))  # 字体路径
 
-    def _check_userdata(self):
-        # 检查 userdata 文件夹是否存在
-        if not os.path.exists(self._userdata_base_path):
-            os.makedirs(self._userdata_base_path)
-
     def _get_or_generate_local_data(self):
+        """如果用户数据目录下已有数据则直接读取, 否则根据内置数据生成"""
         # 载入 c_numuber.json 数据
         with open(self.sehua_title_path, encoding="UTF-8") as data:
             self.sehua_title_data = json.load(data)
